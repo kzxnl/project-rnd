@@ -1,59 +1,85 @@
-/*
-import express, { Request, Response } from 'express';
+import express from 'express';
 import cors from 'cors';
-import pool from './db';
+import bcrypt from 'bcrypt';
+import { Pool } from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const app = express();
-const PORT = 5000;
-
-// Middleware agar server bisa baca data JSON
+app.use(express.json());
 app.use(cors());
-app.use(express.json());
 
-// Tes rute sederhana
-app.get('/', (req: Request, res: Response) => {
-  res.send("Server Login Berjalan!");
+// Konfigurasi Database (Ganti sesuai pgAdmin kamu)
+const pool = new Pool({
+  user: 'postgres',
+  host: 'localhost',
+  database: 'login_db', // Pastikan nama DB sesuai
+  password: 'postgres',      // Pastikan password sesuai
+  port: 5432,
 });
 
-// Jalankan Server
-app.listen(PORT, () => {
-  console.log(`Server nyala di http://localhost:${PORT}`);
-});
-*/
-
-import express, { Request, Response } from 'express';
-import cors from 'cors'; // Pastikan ini ada
-import pool from './db';
-
-const app = express();
-
-// IZINKAN KONEKSI DARI LUAR (CORS)
-app.use(cors()); 
-app.use(express.json());
-
-// Rute tes untuk browser
-app.get('/', (req: Request, res: Response) => {
-  res.send("Server Login Berjalan!");
+// TEST KONEKSI
+pool.connect((err) => {
+  if (err) console.error('Gagal konek database:', err.stack);
+  else console.log('Database terhubung dengan sukses!');
 });
 
-// ROUTE LOGIN UTAMA
-app.post('/api/login', async (req: Request, res: Response) => {
-  const { username, password } = req.body;
+// --- FITUR REGISTER ---
+// URL diubah menjadi /api/register agar cocok dengan Frontend React
+app.post("/api/register", async (req, res) => {
   try {
-    const user = await pool.query(
-      "SELECT * FROM users WHERE username = $1 AND password = $2",
-      [username, password]
+    const { username, password } = req.body; // Email dihapus
+
+    // 1. Cek apakah username sudah dipakai
+    const userExist = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+    if (userExist.rows.length > 0) {
+      return res.status(400).json({ message: "Username sudah ada!" });
+    }
+
+    // 2. Hash password sebelum disimpan
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // 3. Simpan ke database (Hanya username dan password yang di-hash)
+    await pool.query(
+      "INSERT INTO users (username, password) VALUES ($1, $2)",
+      [username, hashedPassword]
     );
 
-    if (user.rows.length > 0) {
-      res.json({ message: "Login Berhasil!", user: user.rows[0].username });
-    } else {
-      res.status(401).json({ message: "Username atau Password salah!" });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Terjadi kesalahan pada database" });
+    res.status(201).json({ message: "Registrasi Berhasil! Silakan Login." });
+  } catch (err: any) {
+    console.error(err.message);
+    res.status(500).json({ message: "Error Server" });
   }
 });
 
-app.listen(5000, () => console.log("Server login siap di port 5000"));
+// --- FITUR LOGIN (Sudah pakai Bcrypt) ---
+// URL diubah menjadi /api/login agar cocok dengan Frontend React
+app.post("/api/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    // 1. Cari user berdasarkan username
+    const result = await pool.query("SELECT * FROM users WHERE username = $1", [username]);
+
+    // 2. Jika user tidak ditemukan
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: "User tidak ditemukan!" });
+    }
+
+    // 3. Bandingkan password input dengan password hash di database
+    const validPassword = await bcrypt.compare(password, result.rows[0].password);
+    if (!validPassword) {
+      return res.status(400).json({ message: "Password salah!" });
+    }
+
+    res.json({ message: "Login Berhasil!", user: result.rows[0].username });
+  } catch (err: any) {
+    res.status(500).json({ message: "Error Server" });
+  }
+});
+
+app.listen(5000, () => {
+  console.log("Server login siap di port 5000");
+});
